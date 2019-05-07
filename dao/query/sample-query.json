@@ -1,0 +1,26 @@
+{
+    "flatAnd" : {
+        "username": "gede.sutarsa" , 
+        "address": { "$like" : "tabanan%"} , 
+        "level2.code": {"$eq" : "101"}
+    },
+    "orExample": {
+        "$or": [
+            {"username": "gede.sutarsa"} , 
+            {"username": "made.agus"}
+        ]
+    }, 
+    "associations" :[
+        {
+            "joinField": "fieldName", 
+            "innerJoin": false , 
+            "additionalWhere": {
+                
+            }, 
+            "associations": [
+
+            ]
+        }
+    ]
+    
+}
