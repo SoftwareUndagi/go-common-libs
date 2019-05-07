@@ -40,6 +40,7 @@ func AssignFlushLogCommand(command func()) {
 
 //RouteLoggerPredefinedParameterFiller parameter filler custom. ini mungkin akan spesifik pada app.
 // executionID = id eksekusi. dalam kasus dengan cloud function ini akan di isi dengan id dari function
+//routePath = path of handled http
 type RouteLoggerPredefinedParameterFiller func(executionID string, routePath string, req *http.Request, routeParameter Parameter, username string, userUUID string, logEntry *log.Entry) (modifiedLogEntry *log.Entry)
 
 //LoginInformationProviderFunction login handler definition
