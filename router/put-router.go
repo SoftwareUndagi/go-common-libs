@@ -5,6 +5,7 @@ import (
 
 	"github.com/SoftwareUndagi/go-common-libs/common"
 	"github.com/gorilla/mux"
+	"github.com/sirupsen/logrus"
 )
 
 //PutHandlerFunction handler http put function
@@ -28,6 +29,8 @@ type PutRouterDefinition struct {
 
 	//DoNotAllowCORS default false, set to true to disable CORS for this path ( post)
 	DoNotAllowCORS bool
+	//CheckForDoubleSubmit check for request that double submit. scan by editor token data
+	CheckForDoubleSubmit *NeedDoubleSubmitProtectionDefinition
 }
 
 //RegisterPutJSONHandlerParam parameter put
@@ -40,10 +43,12 @@ type RegisterPutJSONHandlerParam struct {
 	Secured bool
 	//DisableGzip disable gzip response. per request. ini bisa di override pada level app
 	DisableGzip bool
-	//DoNotAllowCORS default false, set to true to disable CORS for this path ( post)
-	DoNotAllowCORS bool
 	//Handler handler put task
 	Handler func(parameter HTTPPutParameter) (interface{}, common.ErrorWithCodeData)
+	//DoNotAllowCORS default false, set to true to disable CORS for this path ( post)
+	DoNotAllowCORS bool
+	//CheckForDoubleSubmit check for request that double submit. scan by editor token data
+	CheckForDoubleSubmit *NeedDoubleSubmitProtectionDefinition
 }
 
 //RegisterPutJSONHandler register put http handler
@@ -62,6 +67,9 @@ func RegisterPutJSONHandler(param RegisterPutJSONHandlerParam) *mux.Route {
 	}
 
 	theRoute := routeParameter.MuxRouter.HandleFunc(routePath, func(w http.ResponseWriter, req *http.Request) {
+		executionID := generateSimpleRequestExecutionID(req)
+		logEntry := logrus.WithField("executionId", executionID)
+
 		if param.DoNotAllowCORS {
 			if checkForCors(routePath, false, w, req) {
 				return
@@ -86,9 +94,24 @@ func RegisterPutJSONHandler(param RegisterPutJSONHandlerParam) *mux.Route {
 			userUUID = user.UserUUID
 			username = user.Username
 		}
+		if param.CheckForDoubleSubmit != nil {
+			var checkerToken EditorTokenValidationCheckerFunction
+			if param.CheckForDoubleSubmit.CustomChecker != nil {
+				checkerToken = *param.CheckForDoubleSubmit.CustomChecker
+			} else {
+				checkerToken = DefaultEditorTokenValidationChecker
+			}
+			editorToken := DefaultGetterEditorToken(logEntry, req)
+			ok, errCode, errChk := checkerToken(editorToken, username, param.CheckForDoubleSubmit.ObjectName, param.CheckForDoubleSubmit.BusinessObjectName, param.RouteParameter.DatabaseReference, logEntry, req)
+			if !ok {
+				sendErrorResponse(w, resultJSONErrorWrapper{ErrorCode: errCode, ErrorMessage: errChk.Error()})
+				return
+			}
+		}
+
 		localDB := routeParameter.DatabaseReference.New()
 		//defer localDB.Close()
-		_, commParam := generateCommonHTTPParam(routePath, req, param.RouteParameter.Clone(localDB), username, userUUID)
+		_, commParam := generateCommonHTTPParam(executionID, logEntry, routePath, req, param.RouteParameter.Clone(localDB), username, userUUID)
 		v := HTTPPutParameter{HTTPCommonParameter: commParam}
 		if flushLogDataCommand != nil {
 			defer flushLogDataCommand()

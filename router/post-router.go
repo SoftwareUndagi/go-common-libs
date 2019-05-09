@@ -3,6 +3,8 @@ package router
 import (
 	"net/http"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/SoftwareUndagi/go-common-libs/common"
 	"github.com/gorilla/mux"
 )
@@ -23,6 +25,8 @@ type PostRouterDefinition struct {
 
 	//DoNotAllowCORS default false, set to true to disable CORS for this path ( post)
 	DoNotAllowCORS bool
+	//CheckForDoubleSubmit check for request that double submit. scan by editor token data
+	CheckForDoubleSubmit *NeedDoubleSubmitProtectionDefinition
 }
 
 //HTTPPostParameter parameter for post method
@@ -45,6 +49,8 @@ type RegisterPostJSONHandlerParameter struct {
 
 	//DoNotAllowCORS default false, set to true to disable CORS for this path ( post)
 	DoNotAllowCORS bool
+	//CheckForDoubleSubmit check for request that double submit. scan by editor token data
+	CheckForDoubleSubmit *NeedDoubleSubmitProtectionDefinition
 }
 
 //RegisterPostJSONHandler register post route handler
@@ -68,6 +74,8 @@ func RegisterPostJSONHandler(param RegisterPostJSONHandlerParameter) *mux.Route 
 	theRoute := routeParameter.MuxRouter.HandleFunc(routePath, func(w http.ResponseWriter, req *http.Request) {
 		var routePathActual = req.URL.Path
 		var userUUID, username string
+		executionID := generateSimpleRequestExecutionID(req)
+		logEntry := logrus.WithField("executionId", executionID)
 		if !param.DoNotAllowCORS {
 			if !checkForCors(routePath, false, w, req) {
 				return
@@ -90,9 +98,23 @@ func RegisterPostJSONHandler(param RegisterPostJSONHandlerParameter) *mux.Route 
 			userUUID = user.UserUUID
 			username = user.Username
 		}
+		if param.CheckForDoubleSubmit != nil {
+			var checkerToken EditorTokenValidationCheckerFunction
+			if param.CheckForDoubleSubmit.CustomChecker != nil {
+				checkerToken = *param.CheckForDoubleSubmit.CustomChecker
+			} else {
+				checkerToken = DefaultEditorTokenValidationChecker
+			}
+			editorToken := DefaultGetterEditorToken(logEntry, req)
+			ok, errCode, errChk := checkerToken(editorToken, username, param.CheckForDoubleSubmit.ObjectName, param.CheckForDoubleSubmit.BusinessObjectName, param.RouteParameter.DatabaseReference, logEntry, req)
+			if !ok {
+				sendErrorResponse(w, resultJSONErrorWrapper{ErrorCode: errCode, ErrorMessage: errChk.Error()})
+				return
+			}
+		}
 		localDB := routeParameter.DatabaseReference.New()
 		//defer localDB.Close()
-		_, commParam := generateCommonHTTPParam(routePath, req, param.RouteParameter.Clone(localDB), username, userUUID)
+		_, commParam := generateCommonHTTPParam(executionID, logEntry, routePath, req, param.RouteParameter.Clone(localDB), username, userUUID)
 		v := HTTPPostParameter{HTTPCommonParameter: commParam}
 		if flushLogDataCommand != nil {
 			defer flushLogDataCommand()

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SoftwareUndagi/go-common-libs/coremodel"
+
 	"bitbucket.org/theoerp/bham-server/route/security"
 	"github.com/SoftwareUndagi/go-common-libs/common"
 	"github.com/gorilla/mux"
@@ -37,6 +39,124 @@ var flushLogDataCommand func()
 func AssignFlushLogCommand(command func()) {
 	flushLogDataCommand = command
 }
+
+//EditorTokenValidationCheckerFunction checker for double submit
+// method will check to table is key exists , expired or not
+// - objectName is model name. technical name to be compare on checking token. token to edit must came same as data token on db
+// - businessObjectName business name of object. to notify user what wrong
+type EditorTokenValidationCheckerFunction func(editorToken string, username string, objectName string, businessObjectName string, db *gorm.DB, logEntry *log.Entry, req *http.Request) (ok bool, errorCode string, err error)
+
+//GetEditorTokenFunction defintion of method to get editor data token. will be used to stop double submit on form data
+type GetEditorTokenFunction func(logEntry *log.Entry, req *http.Request) (editorToken string)
+
+//GetEditorTokenOnRequestHeader getter editor token on request header. The key for editor token is specified on variable KeyForReqHeaderEditorToken
+func GetEditorTokenOnRequestHeader(logEntry *log.Entry, req *http.Request) (editorToken string) {
+	editorToken = req.Header.Get(KeyForReqHeaderEditorToken)
+	return
+}
+
+//NeedDoubleSubmitProtectionDefinition definition of route that need double submit protection
+type NeedDoubleSubmitProtectionDefinition struct {
+	//ObjectName object name(mostly model name of top level model name)
+	ObjectName string
+	//BusinessObjectName business name of object
+	BusinessObjectName string
+	//CustomChecker if checker need custom check. for example custom name etc. this use to override definition
+	CustomChecker *EditorTokenValidationCheckerFunction
+}
+
+//MaxEditorTokenAgeSecond max duration of editor token(in seconds),default = 15 minutes( 900 secons)
+var MaxEditorTokenAgeSecond = int32(900)
+
+//MessageTemplateUnableToFindEditorToken template message for token not found
+//passed parameter:
+// - index 0 = id of token
+var MessageTemplateUnableToFindEditorToken = "Unable to find token with id: %s "
+
+//MessageTemplateEditorTokenNotActive templae message for token not flag active
+var MessageTemplateEditorTokenNotActive = "Editor token (%s) is not active. This request probably is double submit "
+
+//MessageTemplateEditorTokenExpired template for message token exceed duration
+var MessageTemplateEditorTokenExpired = "Editor token (%s) already expired. You need to re-open the data "
+
+//DefaultEditorTokenValidationChecker default checker for editor token valid state
+//Parameters:
+//- username = username current request. this will be cross check to token owner
+//
+var DefaultEditorTokenValidationChecker = func(editorToken string, username string, objectName string, businessObjectName string, db *gorm.DB, baseLogEntry *log.Entry, req *http.Request) (ok bool, errorCode string, errFinal error) {
+	if len(editorToken) == 0 {
+		return false, "TOKEN_PARAM_EMPTY", fmt.Errorf("Token parameter was not found on the request")
+	}
+	if len(username) == 0 {
+		return false, "USERNAME_EMPTY", fmt.Errorf("Username was not found on request.this request is not allowed")
+	}
+	logEntry := baseLogEntry.WithField("editorToken", editorToken)
+
+	tx := db.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
+		}
+	}()
+	if err := tx.Error; err != nil {
+		errFinal = err
+		errorCode = "START_DB_TRANSACTION_FAILED"
+		logEntry.WithError(err).Errorf("Unable to start database transaction , reported error: %s", err.Error())
+		return
+	}
+	var theToken coremodel.EditDataToken
+	dbRead := tx.Where(&coremodel.EditDataToken{Token: editorToken}).First(&theToken)
+	if dbRead.RowsAffected == 0 {
+		errMsg := fmt.Sprintf(MessageTemplateUnableToFindEditorToken, editorToken)
+		logEntry.Errorf(errMsg)
+		tx.Rollback()
+		return false, "TOKEN_NOT_FOUND", fmt.Errorf(errMsg)
+	}
+
+	if theToken.ActiveFlag != "Y" {
+		errorCode = "TOKEN_NOT_ACTIVE"
+		errMsg := fmt.Sprintf(MessageTemplateEditorTokenNotActive, editorToken)
+		logEntry.Errorf(errMsg)
+		errFinal = fmt.Errorf(errMsg)
+		tx.Rollback()
+		return
+	}
+	if theToken.CreatedAt == nil {
+		logEntry.Errorf("Token[%s]created at is null. ignored", editorToken)
+		errorCode = "TOKEN_EXPIRED"
+		errMsg := fmt.Sprintf(MessageTemplateEditorTokenExpired, editorToken)
+		logEntry.Errorf(errMsg)
+		errFinal = fmt.Errorf(errMsg)
+		tx.Rollback()
+		return
+	}
+	if duration := int32(time.Since(*theToken.CreatedAt).Seconds()); duration > MaxEditorTokenAgeSecond {
+		logEntry.Errorf("Token[%s]Max duration is %d. token duration is %d", editorToken, MaxEditorTokenAgeSecond, duration)
+		errorCode = "TOKEN_EXPIRED"
+		errMsg := fmt.Sprintf(MessageTemplateEditorTokenExpired, editorToken)
+		logEntry.Errorf(errMsg)
+		errFinal = fmt.Errorf(errMsg)
+		tx.Rollback()
+		return
+	}
+	theToken.ActiveFlag = "N"
+	skr := time.Now()
+	if errUpd := tx.Save(theToken).Error; errUpd != nil {
+		tx.Rollback()
+		errFinal = errUpd
+		logEntry.WithError(errUpd).Errorf("Fail to update token for id %s, reported error : %s", editorToken, errUpd.Error())
+		errorCode = "FAIL_UPDATE_TOKEN_DATA"
+		tx.Rollback()
+		return
+	}
+	theToken.UpdatedAt = &(skr)
+	errFinal = tx.Commit().Error
+	ok = true
+	return
+}
+
+//DefaultGetterEditorToken default get editor token
+var DefaultGetterEditorToken = GetEditorTokenOnRequestHeader
 
 //RouteLoggerPredefinedParameterFiller parameter filler custom. ini mungkin akan spesifik pada app.
 // executionID = id eksekusi. dalam kasus dengan cloud function ini akan di isi dengan id dari function
@@ -258,11 +378,16 @@ func appendOptionRouter(muxRouter *mux.Router, routePath string) {
 	theRoute.Methods("OPTIONS")
 }
 
+//generateSimpleRequestExecutionId generate simple exection id. marker for log, to group log from same execution id
+func generateSimpleRequestExecutionID(req *http.Request) (executionID string) {
+	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
 //generateCommonHTTPParam generate common parameter request
 //localDB = db for current connection
-func generateCommonHTTPParam(routePath string, req *http.Request, routeParameter Parameter, username string, userUUID string) (requestID string, commonParam HTTPCommonParameter) {
-	executionID := fmt.Sprintf("%d", time.Now().UnixNano())
-	logEntry := log.WithField("executionId", executionID)
+func generateCommonHTTPParam(executionID string, baseLogEntry *log.Entry, routePath string, req *http.Request, routeParameter Parameter, username string, userUUID string) (requestID string, commonParam HTTPCommonParameter) {
+
+	logEntry := baseLogEntry.WithField("executionId", executionID)
 	routeParameter.DatabaseReference.InstantSet("executionId", executionID)
 	routeParameter.DatabaseReference.InstantSet("username", username)
 	routeParameter.DatabaseReference.InstantSet("userUUID", userUUID)

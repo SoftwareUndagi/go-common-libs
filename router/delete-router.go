@@ -5,6 +5,7 @@ import (
 
 	"github.com/SoftwareUndagi/go-common-libs/common"
 	"github.com/gorilla/mux"
+	"github.com/sirupsen/logrus"
 )
 
 //HTTPDeleteParameter parameter for delete
@@ -25,6 +26,8 @@ type DeleteRouterDefinition struct {
 
 	//DoNotAllowCORS default false, set to true to disable CORS for this path ( post)
 	DoNotAllowCORS bool
+	//CheckForDoubleSubmit check for request that double submit. scan by editor token data
+	CheckForDoubleSubmit *NeedDoubleSubmitProtectionDefinition
 }
 
 //DelHandlerFunction handler http delete request
@@ -44,8 +47,8 @@ type RegisterDeleteJSONHandlerParam struct {
 	DoNotAllowCORS bool
 	//Handler handler post task
 	Handler DelHandlerFunction
-	//ProtectFromDoubleSubmit should app check for double dubmit. double submit check with header as specified on key : KeyForReqHeaderEditorToken
-	ProtectFromDoubleSubmit bool
+	///CheckForDoubleSubmit check for request that double submit. scan by editor token data
+	CheckForDoubleSubmit *NeedDoubleSubmitProtectionDefinition
 }
 
 //RegisterDeleteJSONHandler register method delete
@@ -64,6 +67,9 @@ func RegisterDeleteJSONHandler(param RegisterDeleteJSONHandlerParam) *mux.Route 
 	}
 
 	theRoute := routeParameter.MuxRouter.HandleFunc(routePath, func(w http.ResponseWriter, req *http.Request) {
+		executionID := generateSimpleRequestExecutionID(req)
+		logEntry := logrus.WithField("executionId", executionID)
+
 		if param.DoNotAllowCORS {
 			if checkForCors(routePath, false, w, req) {
 				return
@@ -86,9 +92,24 @@ func RegisterDeleteJSONHandler(param RegisterDeleteJSONHandlerParam) *mux.Route 
 			userUUID = user.UserUUID
 			username = user.Username
 		}
+		if param.CheckForDoubleSubmit != nil {
+			var checkerToken EditorTokenValidationCheckerFunction
+			if param.CheckForDoubleSubmit.CustomChecker != nil {
+				checkerToken = *param.CheckForDoubleSubmit.CustomChecker
+			} else {
+				checkerToken = DefaultEditorTokenValidationChecker
+			}
+			editorToken := DefaultGetterEditorToken(logEntry, req)
+			ok, errCode, errChk := checkerToken(editorToken, username, param.CheckForDoubleSubmit.ObjectName, param.CheckForDoubleSubmit.BusinessObjectName, param.RouteParameter.DatabaseReference, logEntry, req)
+			if !ok {
+				sendErrorResponse(w, resultJSONErrorWrapper{ErrorCode: errCode, ErrorMessage: errChk.Error()})
+				return
+			}
+		}
+
 		localDB := routeParameter.DatabaseReference.New()
 		//defer localDB.Close()
-		_, commParam := generateCommonHTTPParam(routePath, req, param.RouteParameter.Clone(localDB), username, userUUID)
+		_, commParam := generateCommonHTTPParam(executionID, logEntry, routePath, req, param.RouteParameter.Clone(localDB), username, userUUID)
 		v := HTTPDeleteParameter{HTTPCommonParameter: commParam}
 		if flushLogDataCommand != nil {
 			defer flushLogDataCommand()
