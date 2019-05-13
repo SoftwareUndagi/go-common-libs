@@ -164,7 +164,7 @@ var DefaultGetterEditorToken = GetEditorTokenOnRequestHeader
 type RouteLoggerPredefinedParameterFiller func(executionID string, routePath string, req *http.Request, routeParameter Parameter, username string, userUUID string, logEntry *log.Entry) (modifiedLogEntry *log.Entry)
 
 //LoginInformationProviderFunction login handler definition
-type LoginInformationProviderFunction func(DatabaseReference *gorm.DB, req *http.Request) (userData security.SimpleUserData, err common.ErrorWithCodeData)
+type LoginInformationProviderFunction func(DatabaseReference *gorm.DB, logEntry *log.Entry, req *http.Request) (userData security.SimpleUserData, err common.ErrorWithCodeData)
 
 //CORSAllowedPaths path yang di injinkan cors
 var CORSAllowedPaths = make(map[string][]string)
@@ -301,7 +301,16 @@ func sendErrorResponse(w http.ResponseWriter, errorData resultJSONErrorWrapper) 
 	errorData.HaveError = true
 	respContent, _ := json.Marshal(errorData)
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusConflict)
+	w.Write(respContent)
+}
+
+//sendErrorResponseWithStatusCode send error code with specified status code
+func sendErrorResponseWithStatusCode(w http.ResponseWriter, errorData resultJSONErrorWrapper, statusCode int) {
+	errorData.HaveError = true
+	respContent, _ := json.Marshal(errorData)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
 	w.Write(respContent)
 }
 

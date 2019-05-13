@@ -83,7 +83,7 @@ func RegisterPutJSONHandler(param RegisterPutJSONHandlerParam) *mux.Route {
 				sendErrorResponse(w, resultJSONErrorWrapper{ErrorCode: "APP_CONFIG_ERROR", ErrorMessage: "Application configuration not ok. login information provider is missing"})
 				return
 			}
-			user, errLogin := routeParameter.LoginInformationProvider(routeParameter.DatabaseReference, req) //.GetUserLoginInformation(routeParameter.DatabaseReference, req)
+			user, errLogin := routeParameter.LoginInformationProvider(routeParameter.DatabaseReference, logEntry, req) //.GetUserLoginInformation(routeParameter.DatabaseReference, req)
 			if errLogin != nil {
 				if secured {
 					accessDeniedHandler(routePathActual, w, req)
@@ -104,7 +104,7 @@ func RegisterPutJSONHandler(param RegisterPutJSONHandlerParam) *mux.Route {
 			editorToken := DefaultGetterEditorToken(logEntry, req)
 			ok, errCode, errChk := checkerToken(editorToken, username, param.CheckForDoubleSubmit.ObjectName, param.CheckForDoubleSubmit.BusinessObjectName, param.RouteParameter.DatabaseReference, logEntry, req)
 			if !ok {
-				sendErrorResponse(w, resultJSONErrorWrapper{ErrorCode: errCode, ErrorMessage: errChk.Error()})
+				sendErrorResponseWithStatusCode(w, resultJSONErrorWrapper{ErrorCode: errCode, ErrorMessage: errChk.Error()}, http.StatusPreconditionFailed)
 				return
 			}
 		}
