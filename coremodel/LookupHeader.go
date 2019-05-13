@@ -22,11 +22,25 @@ type LookupHeader struct {
 	SQLForDataFiltered string `gorm:"column:sql_data_filtered" json:"sqlForDataFiltered"`
 	//SQLForVersion sql for version of lookup
 	SQLForVersion string `gorm:"column:sql_version" json:"sqlForVersion"`
+	//Details list of LookupDetail under this lookup header
+	Details *[]LookupDetail `gorm:"-" json:"details"`
+	//CodeActualDataType actual data type for code on lookup detail . posible value is : string , number. this value is use to generate in statement on sql
+	CodeActualDataType string `gorm:"column:code_actual_data_type" json:"codeActualDataType"`
 }
 
 //TableName table name for m_lookup_header
 func (p *LookupHeader) TableName(db *gorm.DB) (name string) {
 	return "m_lookup_header"
+}
+
+//AppendLookupDetail append lookup detail to header
+func (p *LookupHeader) AppendLookupDetail(detail LookupDetail) {
+	if p.Details == nil {
+		dtl := []LookupDetail{}
+		p.Details = &dtl
+	}
+	swap := append(*p.Details, detail)
+	p.Details = &swap
 }
 
 //BeforeUpdate hook pre create/ update
